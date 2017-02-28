@@ -13,6 +13,8 @@ import json
 import gzip
 import cv2
 
+
+
 def copyTobiiRecording(input_dir, output_root):
 	"""
 	Copy the relevant files from the specified input dir to the specified output dir
@@ -51,32 +53,61 @@ def formatGazeData(input_dir):
 	"""
 	load livedata.json, write to csv
 	format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video
+
+	Returns:
+		- formatted dataframe with cols for timestamp, frame_idx, and normalized gaze data X & Y
+		- np array of frame timestamps
 	""" 
 
 	# convert the json file to pandas dataframe
-	gaze_df = json_to_df(join(input_dir, 'livedata.json'))
-	gaze_df.to_csv(join(input_dir, 'gazeData.csv'), sep='\t')
+	raw_df = json_to_df(join(input_dir, 'livedata.json'))
+	raw_df.to_csv(join(input_dir, 'gazeData.tsv'), sep='\t')
 
-	## read video file, create array of frame timestamps
+	# drop any row that precedes the start of the video timestamps
+	raw_df = raw_df[raw_df.vts_time >= raw_df.vts_time.min()]
+
+	data_ts = raw_df.index.values
+	confidence = raw_df['confidence'].values
+	norm_gazeX = raw_df['gaze_pos_x'].values
+	norm_gazeY = raw_df['gaze_pos_y'].values
+	vts = raw_df['vts_time'].values / 1000
+
+	# read video file, create array of frame timestamps
 	frame_timestamps = getVidFrameTimestamps(join(input_dir, 'fullstream.mp4'))
-	print(frame_timestamps)
+	frame_idx = np.arange(frame_timestamps.shape[0])
+
+	# use the frame timestamps to assign a frame number to each data point
+	frame_idx = np.zeros(data_ts.shape[0])
+	for i,thisVTS in enumerate(vts):
+
+		# get the frame_timestamp index of where thisVTS would be inserted
+		idx = np.searchsorted(frame_timestamps, thisVTS)
+		if idx == 0: idx = 1
+
+		# set the frame number based on this index value
+		frame_idx[i] = idx-1
+
+	# build the formatted dataframe
+	gaze_df = pd.DataFrame({'timestamp':data_ts, 'confidence':confidence, 'frame_idx': frame_idx, 'norm_pos_x':norm_gazeX, 'norm_pos_y':norm_gazeY})
+	
+	# return the gaze data df and frame time stamps array
+	return gaze_df, frame_timestamps
 
 
 def getVidFrameTimestamps(vid_file):
 	"""
 	Load the supplied video, return an array of frame timestamps
 	"""
-	
-
 	OPENCV3 = (cv2.__version__.split('.')[0] == '3')		# get opencv version
 
 	vid = cv2.VideoCapture(vid_file)
+	
+	# figure out the total number of frames in this video file
 	if OPENCV3:
 		totalFrames = vid.get(cv2.CAP_PROP_FRAME_COUNT)
 	else:
 		totalFrames = vid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT)
 
-	print('{} total frames'.format(int(totalFrames)))
 	frame_ts = np.zeros(int(totalFrames))
 
 	# loop through all video frames
@@ -119,12 +150,8 @@ def json_to_df(json_file):
 		for line in j:
 			entry = json.loads(line)
 
-			# check status of this row
-			if entry['s'] != 0:
-				continue
-
 			### a number of different dictKeys are possible, respond accordingly
-			elif 'vts' in entry.keys(): # "vts" key signfies a video timestamp (first frame, first keyframe, and ~1/min afterwards)
+			if 'vts' in entry.keys(): # "vts" key signfies a video timestamp (first frame, first keyframe, and ~1/min afterwards)
 				vts_sync[entry['ts']] = entry['vts']
 				continue
 
@@ -136,14 +163,17 @@ def json_to_df(json_file):
 					df.loc[entry['ts'], which_eye + '_pup_cent_y'] = entry['pc'][1]
 					df.loc[entry['ts'], which_eye + '_pup_cent_z'] = entry['pc'][2]
 					df.loc[entry['ts'], which_eye + '_pup_cent_val'] = entry['s']
+					df.loc[entry['ts'], 'confidence'] = int(entry['s'] == 0)
 				elif 'pd' in entry.keys():
 					df.loc[entry['ts'], which_eye + '_pup_diam'] = entry['pd']
 					df.loc[entry['ts'], which_eye + '_pup_diam_val'] = entry['s']
+					df.loc[entry['ts'], 'confidence'] = int(entry['s'] == 0)
 				elif 'gd' in entry.keys():
 					df.loc[entry['ts'], which_eye + '_gaze_dir_x'] = entry['gd'][0]
 					df.loc[entry['ts'], which_eye + '_gaze_dir_y'] = entry['gd'][1]
 					df.loc[entry['ts'], which_eye + '_gaze_dir_z'] = entry['gd'][2]
 					df.loc[entry['ts'], which_eye + '_gaze_dir_val'] = entry['s']
+					df.loc[entry['ts'], 'confidence'] = int(entry['s'] == 0)
 			
 			# otherwise it contains gaze position data
 			else:
@@ -151,11 +181,14 @@ def json_to_df(json_file):
 					df.loc[entry['ts'], 'gaze_pos_x'] = entry['gp'][0]
 					df.loc[entry['ts'], 'gaze_pos_y'] = entry['gp'][1]
 					df.loc[entry['ts'], 'gaze_pos_val'] = entry['s']
+					df.loc[entry['ts'], 'confidence'] = int(entry['s'] == 0)
 				elif 'gp3' in entry.keys():
 					df.loc[entry['ts'], '3d_gaze_pos_x'] = entry['gp3'][0]
 					df.loc[entry['ts'], '3d_gaze_pos_y'] = entry['gp3'][1]
 					df.loc[entry['ts'], '3d_gaze_pos_z'] = entry['gp3'][2]
 					df.loc[entry['ts'], '3d_gaze_pos_val'] = entry['s']
+					df.loc[entry['ts'], 'confidence'] = int(entry['s'] == 0)
+
 
 		# set video timestamps column
 		df['vts_time'] = np.array(df.index)	   # df.index is data timstamps
