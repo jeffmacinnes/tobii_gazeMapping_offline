@@ -83,7 +83,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(0, 445, 1)
+	framesToUse = np.arange(0, 500, 1)
 
 	# start time
 	process_startTime = time.time()
@@ -212,7 +212,11 @@ def processRecording(inputDir, refFile, cameraCalib):
 			vidOut_summaryWorld.release()
 
 			# write out gaze data
-			gazeData_master.to_csv(join(outputDir, 'gazeData_master.tsv'), sep='\t', index=False, float_format='%.3f')
+			try:
+				gazeData_master.to_csv(join(outputDir, 'gazeData_master.tsv'), sep='\t', index=False, float_format='%.3f')
+			except:
+				print('cound not write gazeData_master to csv')
+				pass
 
 	endTime = time.time()
 	frameProcessing_time = endTime - frameProcessing_startTime
@@ -248,7 +252,7 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 		ref_matchPts, frame_matchPts = mapper.findMatches(frame_kp, frame_des)
 
 	# check if matches were found
-	try:
+	try:		
 		numMatches = ref_matchPts.shape[0]
 		
 		# if sufficient number of matches....
