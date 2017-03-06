@@ -15,6 +15,7 @@ from __future__ import division
 from __future__ import print_function
 
 import sys, os, shutil
+import fileinput
 import matplotlib
 matplotlib.use('tkagg')
 import matplotlib.pyplot as plt
@@ -27,6 +28,7 @@ import numpy as np
 import pandas as pd 
 import argparse
 import time
+from scipy.ndimage import filters
 
 from tobii_gazeDataFormatting import copyTobiiRecording, formatGazeData
 
@@ -83,8 +85,9 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(0, 500, 1)
-
+	framesToUse = np.arange(0, 350, 1)
+	#framesToUse = np.arange(0,500, 1)
+	
 	# start time
 	process_startTime = time.time()
 
@@ -205,11 +208,15 @@ def processRecording(inputDir, refFile, cameraCalib):
 		# increment frame counter
 		frameCounter += 1
 		if frameCounter > np.max(framesToUse):
+			# release all videos
 			vid.release()
 			vidOut_orig.release()
 			vidOut_gaze.release()
 			vidOut_summaryRef.release()
 			vidOut_summaryWorld.release()
+
+			# prep 3D animation
+			create3Danimation(outputDir, refFile, gazeData_master)
 
 			# write out gaze data
 			try:
@@ -241,122 +248,143 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 	frame_ts = frame_timestamps[frameCounter]
 	fr['frame_ts'] = frame_ts 			# store
 
-	# find the key points and features on this frame
-	frame_kp, frame_des = mapper.findFeatures(frame_gray)
-	print('found %s features on frame %s' %(len(frame_kp), frameCounter))
+	# Try to process this frame
+	try:
+		# find the key points and features on this frame
+		frame_kp, frame_des = mapper.findFeatures(frame_gray)
+		print('found %s features on frame %s' %(len(frame_kp), frameCounter))
 
-	# look for matching keypoints on the reference stimulus
-	if len(frame_kp) < 2:
-		ref_matchPts = None
-	else:
-		ref_matchPts, frame_matchPts = mapper.findMatches(frame_kp, frame_des)
-
-	# check if matches were found
-	try:		
-		numMatches = ref_matchPts.shape[0]
-		
-		# if sufficient number of matches....
-		if numMatches > 10:
-			print('found %s matches on frame %s' %(numMatches, frameCounter))
-			sufficientMatches = True
+		# look for matching keypoints on the reference stimulus
+		if len(frame_kp) < 2:
+			ref_matchPts = None
 		else:
-			print('Insufficient matches (%s matches) on frame %s' %(numMatches, frameCounter))
+			ref_matchPts, frame_matchPts = mapper.findMatches(frame_gray, frame_kp, frame_des)
+
+		# check if matches were found
+		try:		
+			numMatches = ref_matchPts.shape[0]
+
+			# if sufficient number of matches....
+			if numMatches > 10:
+				print('found %s matches on frame %s' %(numMatches, frameCounter))
+				sufficientMatches = True
+			else:
+				print('Insufficient matches (%s matches) on frame %s' %(numMatches, frameCounter))
+				sufficientMatches = False
+
+		except:
+			print ('no matches found on frame %s' % frameCounter)
 			sufficientMatches = False
+			pass
 
-	except:
-		print ('no matches found on frame %s' % frameCounter)
-		sufficientMatches = False
-		pass
+		fr['foundGoodMatch'] = sufficientMatches
+		
+		# Uses matches to find 2D and 3D transformations
+		if sufficientMatches:
+			### 3D operations ##########################
+			# get mapping from camera to 3D location of reference image. Reference match points treated as 2D plane in the world (z=0)
+			rvec, tvec = mapper.PnP_3Dmapping(ref_matchPts, frame_matchPts)
 
-	# Uses matches to find 2D and 3D transformations
-	if not sufficientMatches:
-		# if not enough matches on this frame, store the untouched frames
-		fr['gazeFrame'] = origFrame
-		fr['foundGoodMatch'] = False
+			# calculate camera position & orientation
+			camPosition, camOrientation = mapper.getCameraPosition(rvec, tvec)
+			fr['camPosition'] = camPosition
+			fr['camOrientation'] = camOrientation
 
-	else:
-		fr['foundGoodMatch'] = True
-		### 3D operations ##########################
-		# get mapping from camera to 3D location of reference image. Reference match points treated as 2D plane in the world (z=0)
-		rvec, tvec = mapper.PnP_3Dmapping(ref_matchPts, frame_matchPts)
+			### 2D operations ###########################
+			# get the transformation matrices to map between world frame and reference stimuli
+			ref2frame_2D, frame2ref_2D = mapper.get2Dmapping(ref_matchPts, frame_matchPts)
+			fr['ref2frame_2Dtrans'] = ref2frame_2D
+			fr['frame2ref_2Dtrans'] = frame2ref_2D
 
-		# calculate camera position & orientation
-		camPosition, camOrientation = mapper.getCameraPosition(rvec, tvec)
-		fr['camPosition'] = camPosition
-		fr['camOrientation'] = camOrientation
+			### Gaze data operations ####################
+			if thisFrame_gazeData_world.shape[0] == 0:
+				# if no gaze points for this frame
+				drawGazePt = False
 
-		### 2D operations ###########################
-		# get the transformation matrices to map between world frame and reference stimuli
-		ref2frame_2D, frame2ref_2D = mapper.get2Dmapping(ref_matchPts, frame_matchPts)
-		fr['ref2frame_2Dtrans'] = ref2frame_2D
-		fr['frame2ref_2Dtrans'] = frame2ref_2D
+				# store empty dataframe to store gaze data in frame, reference, and object coordinates
+				gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
+											'frame_gazeX', 'frame_gazeY',
+											'ref_gazeX', 'ref_gazeY', 
+											'obj_gazeX', 'obj_gazeY', 'obj_gazeZ', 
+											'camX', 'camY', 'camZ',
+											'camTheta', 'camRX', 'camRY', 'camRZ'])
+				fr['gazeData'] = gazeData_df
+				fr['gazeFrame'] = origFrame
 
-		### Gaze data operations ####################
-		if thisFrame_gazeData_world.shape[0] == 0:
-			# if no gaze points for this frame
-			drawGazePt = False
+			else:
+				drawGazePt = True
 
-			# store empty dataframe to store gaze data in frame, reference, and object coordinates
-			gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
-										'frame_gazeX', 'frame_gazeY',
-										'ref_gazeX', 'ref_gazeY', 
-										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
-			fr['gazeData'] = gazeData_df
-			fr['gazeFrame'] = origFrame
+				# create dataframes to write gaze data into
+				gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
+											'frame_gazeX', 'frame_gazeY',
+											'ref_gazeX', 'ref_gazeY', 
+											'obj_gazeX', 'obj_gazeY', 'obj_gazeZ',
+											'camX', 'camY', 'camZ',
+											'camTheta', 'camRX', 'camRY', 'camRZ'])
+				
+				# get the camera position and orientation
+				camX = camPosition[0]
+				camY = camPosition[1]
+				camZ = camPosition[2]
+				camTheta = camOrientation[0]
+				camRX = camOrientation[1]
+				camRY = camOrientation[2]
+				camRZ = camOrientation[3]
+				
+				# grab all gaze data for this frame, translate to different coordinate systems
+				for i,gazeRow in thisFrame_gazeData_world.iterrows():
+					ts = gazeRow['timestamp']
+					frameNum = frameCounter
+					conf = gazeRow['confidence']
 
-		else:
-			drawGazePt = True
+					# translate normalized gaze location to screen coords
+					frame_gazeX = gazeRow['norm_pos_x'] * frame_gray.shape[1]
+					frame_gazeY = gazeRow['norm_pos_y'] * frame_gray.shape[0]
 
-			# create dataframes to write gaze data into
-			gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
-										'frame_gazeX', 'frame_gazeY',
-										'ref_gazeX', 'ref_gazeY', 
-										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
+					# convert coordinates from frame to reference stimulus coordinates
+					ref_gazeX, ref_gazeY = mapper.mapCoords2D((frame_gazeX, frame_gazeY), frame2ref_2D)
+
+					# convert from reference stimulus to object coordinates
+					objCoords = mapper.ref2obj(np.array([ref_gazeX, ref_gazeY]).reshape(1,2))
+					obj_gazeX, obj_gazeY, obj_gazeZ = objCoords.ravel()
+ 
+					# create dict
+					thisRow_df = pd.DataFrame({'gaze_ts': ts, 'worldFrame': frameNum, 'confidence':conf,
+												'frame_gazeX': frame_gazeX, 'frame_gazeY': frame_gazeY,
+												'ref_gazeX': ref_gazeX, 'ref_gazeY': ref_gazeY,
+												'obj_gazeX': obj_gazeX, 'obj_gazeY': obj_gazeY, 'obj_gazeZ': obj_gazeZ,
+												'camX': camX, 'camY': camY, 'camZ': camZ,
+												'camTheta': camTheta, 'camRX':camRX, 'camRY':camRY, 'camRZ':camRZ},
+												index=[i])
+
+					# append this row to the gaze data dataframe
+					gazeData_df = pd.concat([gazeData_df, thisRow_df])
+
+				# store gaze data
+				fr['gazeData'] = gazeData_df
+
+				# draw circles for gaze locations
+				gazeFrame = origFrame.copy()
+				for i,row in gazeData_df.iterrows():
+					frame_gazeX = int(row['frame_gazeX'])
+					frame_gazeY = int(row['frame_gazeY'])
+
+					# set color for last value to be different than previous values for this frame
+					if i == gazeData_df.index.max():
+						cv2.circle(gazeFrame, (frame_gazeX, frame_gazeY), 10, [96, 52, 234], -1)
+					else:
+						cv2.circle(gazeFrame, (frame_gazeX, frame_gazeY), 8, [168, 231, 86], -1)
+
+				# store the gaze frame
+				fr['gazeFrame'] = gazeFrame
 			
-			# grab all gaze data for this frame, translate to different coordinate systems
-			for i,gazeRow in thisFrame_gazeData_world.iterrows():
-				ts = gazeRow['timestamp']
-				frameNum = frameCounter
-				conf = gazeRow['confidence']
-
-				# translate normalized gaze location to screen coords
-				frame_gazeX = gazeRow['norm_pos_x'] * frame_gray.shape[1]
-				frame_gazeY = gazeRow['norm_pos_y'] * frame_gray.shape[0]
-
-				# convert coordinates from frame to reference stimulus coordinates
-				ref_gazeX, ref_gazeY = mapper.mapCoords2D((frame_gazeX, frame_gazeY), frame2ref_2D)
-
-				# convert from reference stimulus to object coordinates
-				objCoords = mapper.ref2obj(np.array([ref_gazeX, ref_gazeY]).reshape(1,2))
-				obj_gazeX, obj_gazeY, obj_gazeZ = objCoords.ravel()
-
-				# create dict
-				thisRow_df = pd.DataFrame({'gaze_ts': ts, 'worldFrame': frameNum, 'confidence':conf,
-											'frame_gazeX': frame_gazeX, 'frame_gazeY': frame_gazeY,
-											'ref_gazeX': ref_gazeX, 'ref_gazeY': ref_gazeY,
-											'obj_gazeX': obj_gazeX, 'obj_gazeY': obj_gazeY, 'obj_gazeZ': obj_gazeZ},
-											index=[i])
-
-				# append this row to the gaze data dataframe
-				gazeData_df = pd.concat([gazeData_df, thisRow_df])
-
-			# store gaze data
-			fr['gazeData'] = gazeData_df
-
-			# draw circles for gaze locations
-			gazeFrame = origFrame.copy()
-			for i,row in gazeData_df.iterrows():
-				frame_gazeX = int(row['frame_gazeX'])
-				frame_gazeY = int(row['frame_gazeY'])
-
-				# set color for last value to be different than previous values for this frame
-				if i == gazeData_df.index.max():
-					cv2.circle(gazeFrame, (frame_gazeX, frame_gazeY), 10, [96, 52, 234], -1)
-				else:
-					cv2.circle(gazeFrame, (frame_gazeX, frame_gazeY), 8, [168, 231, 86], -1)
-
-			# store the gaze frame
-			fr['gazeFrame'] = gazeFrame
+		elif not sufficientMatches:
+			fr['gazeFrame'] = origFrame	
+	
+	except:
+		print('gaze mapping failed on frame {}'.format(frameCounter))
+		fr['gazeFrame'] = origFrame	
+		fr['foundGoodMatch'] = False	
 
 	# Return the dict holding all of the info for this frame
 	return fr
@@ -441,6 +469,77 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 	return heatmap
 
 
+def create3Danimation(output_dir, referenceImage_file, gazeData_df):
+	"""
+	create an animated 3D reconstruction of viewing behavior
+	based on the javascript template
+	"""
+
+	# copy the template directory
+	if os.path.isdir(join(output_dir, '3D')):	
+		shutil.rmtree(join(output_dir, '3D'))			# remove if already exists
+	shutil.copytree('visTemplate_3D', join(output_dir, '3D'))
+
+	# replace obj dimension vars in javascript file with the dims specified here
+	for line in fileinput.input(join(output_dir, '3D', 'gazeMapping3D.js'), inplace=True):
+		if 'var targetWidth =' in line:
+			line = line.replace('var targetWidth = 76;', 'var targetWidth = {};'.format(str(obj_dims[1])))
+		if 'var targetHeight =' in line:
+			line = line.replace('var targetHeight = 82;', 'var targetHeight = {};'.format(str(obj_dims[0])))
+		sys.stdout.write(line) 
+
+	# make resized copy of the reference image
+	refStim = cv2.imread(referenceImage_file)   		# load in ref stimulus
+	im_h = refStim.shape[0]
+	im_w = refStim.shape[1]
+	aspect_ratio = im_h/im_w
+	new_w = 600   										# max width
+	new_h = int(new_w * aspect_ratio)
+	refStim_small = cv2.resize(refStim, (new_w, new_h))
+	cv2.imwrite(join(output_dir, '3D', 'textures', 'target_small.jpg'), refStim_small)
+
+	### format the gaze_df
+	# there are multiple gaze values per frame; take the average by frame
+	df_byFrame = gazeData_df.groupby('worldFrame').mean()
+
+	# interpolate over any missing values
+	df_byFrame.interpolate(method='linear', inplace=True)
+
+	# apply smoothing function the the camera position/orientation columns
+	dfSmooth = df_byFrame.loc[:, ['camX', 'camY', 'camZ', 'camTheta', 'camRX', 'camRY', 'camRZ']].apply(smoothMotion, axis=0)
+
+	# combine the smoothed camera movements with the gaze coordinates (in 3D object space)
+	animation_df = pd.concat([dfSmooth, df_byFrame.loc[:, ['obj_gazeX', 'obj_gazeY', 'obj_gazeZ']]], axis=1)
+
+	# write to csv file
+	animation_df.to_csv(join(output_dir, '3D', 'data', 'camera_and_gaze_smooth.csv'), float_format='%.3f', sep=',', index=False)
+
+
+def smoothMotion(arr):
+	"""
+	Apply a Gaussian filter to the supplied array
+	"""
+	keepGoing = True
+	while keepGoing:
+		# calculate the 1st order differential
+		arrDiff = np.diff(arr)
+		arrDiff = np.insert(arrDiff, 0, 0)		# insert 0 to make matching arr size
+
+		# remove datapts where the difference is greater than 5 and interpolate over
+		arrFilt = arr.copy()
+		arrFilt[np.abs(arrDiff)>3] = np.nan
+
+		if sum(np.isnan(arrFilt)) == 0:
+		    keepGoing = False
+
+		arrInterp = pd.Series(arrFilt).interpolate()
+
+		# smooth with Gaussian filter
+		arr = filters.gaussian_filter1d(arrInterp, 3)
+
+	return arr
+
+
 ###
 if __name__ == '__main__':
 	# parse arguments
@@ -458,6 +557,7 @@ if __name__ == '__main__':
 	else:
 		# copy the raw data to the output dir
 		newDataDir = copyTobiiRecording(args.inputDir, args.outputDir)
+		print('Input data copied to: {}'.format(newDataDir))
 
 		# processing the data (note: the output dir from previous step is now the input dir for this step)
 		processRecording(newDataDir, args.referenceFile, args.cameraCalibration)

@@ -81,7 +81,7 @@ class GazeMapper:
 		return kp, des
 
 
-	def findMatches(self, frame_kp, frame_des):
+	def findMatches(self, frame, frame_kp, frame_des):
 		"""
 		Find the matches between the descriptors for reference image (already calculated) and frame. 
 			Inputs: 	camera frame key points, camera frame descriptors
@@ -96,7 +96,6 @@ class GazeMapper:
 		for m,n in matches:
 			if m.distance < self.distance_ratio*n.distance:
 				goodMatches.append(m)
-
 		if len(goodMatches) > self.min_good_matches:
 			refImg_pts = np.float32([self.refImg_kp[i.queryIdx].pt for i in goodMatches])
 			frameImg_pts = np.float32([frame_kp[i.trainIdx].pt for i in goodMatches])
