@@ -76,7 +76,7 @@ For clarity, here are those different systems and the labels used when referenci
 """
 
 # global settings/vars
-obj_dims = (30,20) 		# real world dims (height, width) in inches of the stimulus
+obj_dims = (49, 33) 		# real world dims (height, width) in inches of the stimulus
 
 def processRecording(inputDir, refFile, cameraCalib):
 	"""
@@ -85,7 +85,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(0, 350, 1)
+	framesToUse = np.arange(250, 10000, 1)
 	#framesToUse = np.arange(0,500, 1)
 	
 	# start time
@@ -111,7 +111,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	### Prep the reference stimulus ########################
 	print('Prepping reference stimulus...')
 	shutil.copy(refFile, outputDir) 	# put a copy of the reference file in the outputDir
-	refStim = cv2.imread(refFile)   		# load in ref stimulus
+	refStim = cv2.imread(refFile, -1)   		# load in ref stimulus
 	
 	refStim_dims = (refStim.shape[1], refStim.shape[0])  # pixel dims of stimulus (height, width)
 
@@ -191,8 +191,9 @@ def processRecording(inputDir, refFile, cameraCalib):
 				# make the summary visualization (in reference stim coords)
 				gazeSummary_ref = createHeatmap(gazeData_master, frameCounter, mapper.refImgColor)
 
-				# project the gazeSummary visualization back into the world coords
+				# if the heatmap has an alpha channel, temporarily add alpha channel to world frame (for projection purposes)
 				mappedSummaryFrame = mapper.projectImage2D(processedFrame['origFrame'], processedFrame['ref2frame_2Dtrans'], gazeSummary_ref)
+
 
 			else:
 				# otherwise, just place the original frame
@@ -398,6 +399,10 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 	# retrieve the gaze values mapped to the reference stim
 	heatmap_df = gazeData_master.loc[gazeData_master['worldFrame'] <= frameCounter, ['worldFrame', 'ref_gazeX', 'ref_gazeY']]
 
+	# preserve alpha channel, if necessary
+	if refStim.shape[2] == 4:
+		b_channel, g_channel, r_channel, alpha_channel = cv2.split(refStim)
+
 	# start the plot
 	refStim_RGB = cv2.cvtColor(refStim, cv2.COLOR_BGR2RGB)
 	w = refStim.shape[1]
@@ -465,6 +470,13 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 		
 		# convert to rgb
 		heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+
+		# add alpha layer, if necessary
+		if refStim.shape[2] == 4:
+			b_channel, g_channel, r_channel = cv2.split(heatmap)
+			
+			# alpha channel would have been extracted at the beginning of createHeatmap Fn
+			heatmap = cv2.merge((b_channel, g_channel, r_channel, alpha_channel))
 
 	return heatmap
 

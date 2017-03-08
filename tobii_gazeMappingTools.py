@@ -174,12 +174,17 @@ class GazeMapper:
 
 		# mask and subtract new image from video frame
 		warpedImage_bw = cv2.cvtColor(warpedImage, cv2.COLOR_BGR2GRAY)
+		if warpedImage.shape[2] == 4:
+			alpha = warpedImage[:,:,3]
+			alpha[alpha == 255] = 1
+			warpedImage_bw =cv2.multiply(warpedImage_bw, alpha)
+
 		ret, mask = cv2.threshold(warpedImage_bw, 10, 255, cv2.THRESH_BINARY)
 		mask_inv = cv2.bitwise_not(mask)
 		origFrame_bg = cv2.bitwise_and(origFrame, origFrame, mask=mask_inv)
 
 		# mask the warped new image, and add to the masked background frame
-		warpedImage_fg = cv2.bitwise_and(warpedImage, warpedImage, mask=mask)
+		warpedImage_fg = cv2.bitwise_and(warpedImage[:,:,:3], warpedImage[:,:,:3], mask=mask)
 		newFrame = cv2.add(origFrame_bg, warpedImage_fg)
 
 		# return the warped new frame
