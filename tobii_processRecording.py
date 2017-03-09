@@ -76,7 +76,7 @@ For clarity, here are those different systems and the labels used when referenci
 """
 
 # global settings/vars
-obj_dims = (49, 33) 		# real world dims (height, width) in inches of the stimulus
+obj_dims = (91, 142) 		# real world dims (height, width) in inches of the stimulus
 
 def processRecording(inputDir, refFile, cameraCalib):
 	"""
@@ -85,7 +85,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(250, 10000, 1)
+	framesToUse = np.arange(75, 10000, 1)
 	#framesToUse = np.arange(0,500, 1)
 	
 	# start time
@@ -441,8 +441,11 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 		plt.close(fig)
 
 		# add gaze trace
-		for i,row in heatmap_df.iterrows():
-			if i == heatmap_df.index.min():
+		nFramesBack = 10
+		gazeTrace_df = heatmap_df.loc[(heatmap_df.worldFrame > (frameCounter - nFramesBack)) & (heatmap_df.worldFrame <= frameCounter), :]
+		for i,row in gazeTrace_df.iterrows():
+			# draw lines
+			if i == gazeTrace_df.index.min():
 				# set the starting point
 				prev_ref_gazeX = int(row['ref_gazeX'])
 				prev_ref_gazeY = int(row['ref_gazeY'])
@@ -451,22 +454,37 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 				cur_ref_gazeY = int(row['ref_gazeY'])
 
 				# draw line connecting previous point to current
-				cv2.line(heatmap, (prev_ref_gazeX, prev_ref_gazeY), (cur_ref_gazeX, cur_ref_gazeY), [107, 234, 101], 3, cv2.LINE_AA)
+				cv2.line(heatmap, (prev_ref_gazeX, prev_ref_gazeY), (cur_ref_gazeX, cur_ref_gazeY), [0, 0, 0], 3, cv2.LINE_AA)
 
 				# update previous point
 				prev_ref_gazeX = cur_ref_gazeX
 				prev_ref_gazeY = cur_ref_gazeY
 
-		# add circles for the last dots
-		for i,row in heatmap_df.loc[heatmap_df['worldFrame'] == frameCounter, :].iterrows():
+			# draw circles
 			ref_gazeX = int(row['ref_gazeX'])
 			ref_gazeY = int(row['ref_gazeY'])
-
-			# set color for last value to be different than previous values for this frame
-			if i == heatmap_df.index.max():
-				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 10, [234, 52, 96], -1)
+			if i == gazeTrace_df.index.max():
+				r = 30
+				dotColor = [230, 40, 60]
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), r, dotColor, 4)
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), int(.65*r), [255, 255, 255], -1)
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), int(.3*r), dotColor, -1)
 			else:
-				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 8, [86, 231, 168], -1)
+				r = 20
+				dotColor = [77, 246, 164]
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), r, dotColor, 3)
+			
+
+		# # add circles for the last dots
+		# for i,row in gazeTrace_df.loc[gazeTrace['worldFrame'] == frameCounter, :].iterrows():
+		# 	ref_gazeX = int(row['ref_gazeX'])
+		# 	ref_gazeY = int(row['ref_gazeY'])
+
+		# 	# set color for last value to be different than previous values for this frame
+		# 	if i == heatmap_df.index.max():
+		# 		cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 10, [234, 52, 96], -1)
+		# 	else:
+		# 		cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 8, [86, 231, 168], -1)
 		
 		# convert to rgb
 		heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
