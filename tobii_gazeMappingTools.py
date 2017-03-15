@@ -176,7 +176,7 @@ class GazeMapper:
 		warpedImage_bw = cv2.cvtColor(warpedImage, cv2.COLOR_BGR2GRAY)
 		if warpedImage.shape[2] == 4:
 			alpha = warpedImage[:,:,3]
-			alpha[alpha == 255] = 1
+			alpha[alpha == 255] = 1 			# create mask of non-transparent pixels
 			warpedImage_bw =cv2.multiply(warpedImage_bw, alpha)
 
 		ret, mask = cv2.threshold(warpedImage_bw, 10, 255, cv2.THRESH_BINARY)

@@ -76,7 +76,7 @@ For clarity, here are those different systems and the labels used when referenci
 """
 
 # global settings/vars
-obj_dims = (91, 142) 		# real world dims (height, width) in inches of the stimulus
+obj_dims = (49, 33) 		# real world dims (height, width) in inches of the stimulus
 
 def processRecording(inputDir, refFile, cameraCalib):
 	"""
@@ -85,7 +85,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(75, 10000, 1)
+	framesToUse = np.arange(200, 10000, 1)
 	#framesToUse = np.arange(0,500, 1)
 	
 	# start time
@@ -191,9 +191,8 @@ def processRecording(inputDir, refFile, cameraCalib):
 				# make the summary visualization (in reference stim coords)
 				gazeSummary_ref = createHeatmap(gazeData_master, frameCounter, mapper.refImgColor)
 
-				# if the heatmap has an alpha channel, temporarily add alpha channel to world frame (for projection purposes)
+				# project the gazeSummary visualization back into the world coords
 				mappedSummaryFrame = mapper.projectImage2D(processedFrame['origFrame'], processedFrame['ref2frame_2Dtrans'], gazeSummary_ref)
-
 
 			else:
 				# otherwise, just place the original frame
@@ -203,7 +202,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 			# Write out this frame's different video files
 			vidOut_orig.write(processedFrame['origFrame'])
 			vidOut_gaze.write(processedFrame['gazeFrame'])
-			vidOut_summaryRef.write(gazeSummary_ref)
+			vidOut_summaryRef.write(gazeSummary_ref[:,:,:3])		# ignore the transparency layer, if any, when writing the reference summary vid
 			vidOut_summaryWorld.write(mappedSummaryFrame)
 
 		# increment frame counter
